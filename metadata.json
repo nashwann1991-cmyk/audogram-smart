@@ -1,0 +1,10 @@
+{
+  "name": "Remix: Smart Audiometry Web – Intelligent Hearing Analysis",
+  "description": "A professional web-based hearing analysis system with audiogram visualization, AI-powered diagnosis, and secure cloud-based patient data management via Firebase.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

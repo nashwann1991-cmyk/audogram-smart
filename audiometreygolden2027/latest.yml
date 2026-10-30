@@ -1,0 +1,8 @@
+version: 1.0.0
+files:
+  - url: audiometrey-setup-1.0.0.exe
+    sha512: MLCRcpxZIvF4fBZ7JfQAilJqfV3/zbU9o1JIlJvwc2YURgoBkw2Ux+5vxzo1crkDYHlbGZauVPI0DZWYPpn9Ww==
+    size: 146554043
+path: audiometrey-setup-1.0.0.exe
+sha512: MLCRcpxZIvF4fBZ7JfQAilJqfV3/zbU9o1JIlJvwc2YURgoBkw2Ux+5vxzo1crkDYHlbGZauVPI0DZWYPpn9Ww==
+releaseDate: '2026-10-25T12:31:30.789Z'

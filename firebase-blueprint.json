@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "Patient": {
+      "title": "Patient",
+      "description": "A patient record with audiometry data",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Full name of the patient" },
+        "dob": { "type": "string", "description": "Date of birth" },
+        "email": { "type": "string", "format": "email", "description": "Email address" },
+        "age": { "type": "number", "description": "Age in years" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "visitDate": { "type": "string", "description": "Date of the visit" },
+        "doctorName": { "type": "string", "description": "Name of the attending doctor" },
+        "notes": { "type": "string", "description": "Clinical notes" },
+        "data": { "type": "object", "description": "Audiometry data including thresholds" },
+        "diagnosis": { "type": "string", "description": "AI or manual diagnosis" },
+        "summary": { "type": "string", "description": "AI-generated concise summary" },
+        "ambientNoise": { "type": "number", "description": "Ambient noise level during test" },
+        "uid": { "type": "string", "description": "Owner UID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["name", "uid", "createdAt"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "A clinical task",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Task description" },
+        "completed": { "type": "boolean", "description": "Completion status" },
+        "uid": { "type": "string", "description": "Owner UID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["title", "uid", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and role",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "isActive": { "type": "boolean", "description": "Whether the account is activated by admin" },
+        "subscriptionExpiry": { "type": "string", "format": "date-time", "description": "Subscription expiration date" }
+      },
+      "required": ["email", "role", "isActive"]
+    },
+    "Note": {
+      "title": "Note",
+      "description": "A quick note saved by the user",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "description": "The content of the note" },
+        "uid": { "type": "string", "description": "Owner UID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["content", "uid", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/patients/{patientId}": {
+      "schema": "Patient",
+      "description": "Collection of patient records"
+    },
+    "/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "Collection of clinical tasks"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/notes/{noteId}": {
+      "schema": "Note",
+      "description": "Quick notes"
+    }
+  }
+}

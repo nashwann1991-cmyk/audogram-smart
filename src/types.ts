@@ -73,7 +73,7 @@ export interface Patient {
   dob?: string;
   email?: string;
   age: number;
-  phone: string;
+  phone?: string;
   gender?: 'male' | 'female';
   visitDate: string;
   doctorName: string;

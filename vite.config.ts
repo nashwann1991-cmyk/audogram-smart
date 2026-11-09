@@ -28,6 +28,9 @@ export default defineConfig(({mode}) => {
               type: 'image/png'
             }
           ]
+        },
+        workbox: {
+          maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         }
       })
     ],

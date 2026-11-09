@@ -15,6 +15,20 @@
   [dir="ltr"] {
     font-family: 'Plus Jakarta Sans', 'IBM Plex Sans Arabic', system-ui, sans-serif;
   }
+
+  /* Safe area support for mobile notched phones (iPhone & modern Androids) */
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+    -webkit-tap-highlight-color: transparent;
+  }
 }
 
 /* Custom subtle scrollbars for clinical data tables */

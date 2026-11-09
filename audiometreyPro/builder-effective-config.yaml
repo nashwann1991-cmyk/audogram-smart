@@ -1,0 +1,23 @@
+directories:
+  output: audiometreyPro
+  buildResources: build
+appId: com.gemini.app
+productName: 'تطبيق تخطيط السمع   '
+files:
+  - filter:
+      - dist/**/*
+      - main.cjs
+      - preload.js
+      - activation.html
+      - license.js
+      - storage.js
+      - splash.html
+      - serviceAccountKey.json
+      - package.json
+win:
+  target: nsis
+  icon: public/100.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+electronVersion: 41.5.1

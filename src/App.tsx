@@ -43,6 +43,7 @@ import { AudiometryInput } from './components/AudiometryInput';
 import { analyzeHearing, simulateAmplification, AmplificationProfileId } from './services/hearingAnalysis';
 import { localDB } from './services/localDB';
 import { getLocalDiagnosis, getLocalPatientAdvice } from './services/localAnalysisService';
+import { noiseDetector } from './services/noiseDetectionService';
 import {
   GEMINI_API_KEY_STORAGE_KEY,
   GEMINI_MODEL_STORAGE_KEY,
@@ -57,6 +58,14 @@ import {
   verifyClientAIModelOrKey,
   getOpenSourceDesktopClinicalDiagnosis,
 } from './services/aiService';
+import { ActivationModal } from './components/ActivationModal';
+import { 
+  getSubscriptionStatus, 
+  incrementTrialReportUsage, 
+  SubscriptionStatus, 
+  TRIAL_MAX_REPORTS,
+  DEVELOPER_PHONE 
+} from './services/subscriptionService';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { Language, translations } from './translations';
@@ -148,6 +157,34 @@ function AppContent() {
   const [isNoiseMonitoring, setIsNoiseMonitoring] = useState(false);
   const [micPermission, setMicPermission] = useState<PermissionState | 'unknown'>('unknown');
 
+  // Subscription & Activation state
+  const [subscription, setSubscription] = useState<SubscriptionStatus>({
+    isActivated: false,
+    isTrial: true,
+    trialReportsUsed: 0,
+    trialReportsLimit: TRIAL_MAX_REPORTS,
+    trialExpired: false,
+    plan: 'trial',
+    deviceId: '',
+  });
+  const [isActivationModalOpen, setIsActivationModalOpen] = useState(false);
+
+  const refreshSubscriptionStatus = async () => {
+    try {
+      const sub = await getSubscriptionStatus();
+      setSubscription(sub);
+      if (sub.trialExpired && !sub.isActivated) {
+        setIsActivationModalOpen(true);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    refreshSubscriptionStatus();
+  }, []);
+
   useEffect(() => {
     const activeLocalKey = geminiApiKey.trim();
     fetch('/api/ai-status', {
@@ -171,31 +208,32 @@ function AppContent() {
     }
   }, []);
 
-  const requestMicPermission = async () => {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      showToast(lang === 'ar' ? 'متصفحك لا يدعم الوصول للميكروفون' : 'Your browser does not support microphone access', 'error');
+  // Synchronize noise detector level with global state
+  useEffect(() => {
+    const unsub = noiseDetector.subscribe(data => {
+      setCurrentNoiseLevel(data.level);
+    });
+    return () => unsub();
+  }, []);
+
+  const toggleNoiseMonitoring = async () => {
+    if (isNoiseMonitoring) {
+      noiseDetector.stop();
+      setIsNoiseMonitoring(false);
       return;
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      // Stop the stream immediately, we just wanted the permission
-      stream.getTracks().forEach(track => track.stop());
+
+    const started = await noiseDetector.start();
+    if (started) {
       setIsNoiseMonitoring(true);
-      showToast(lang === 'ar' ? 'تم منح الوصول للميكروفون' : 'Microphone access granted', 'success');
-    } catch (err: any) {
-      console.error("Mic permission error:", err);
-      if (err.name === 'NotAllowedError' || err.message?.includes('denied')) {
-        showToast(
-          lang === 'ar' 
-            ? 'تم رفض الوصول للميكروفون. يرجى تفعيله من إعدادات المتصفح أو فتح التطبيق في نافذة جديدة.' 
-            : 'Microphone access denied. Please enable it in browser settings or open the app in a new tab.', 
-          'error'
-        );
-      } else {
-        showToast(lang === 'ar' ? 'خطأ في الوصول للميكروفون' : 'Error accessing microphone', 'error');
-      }
+      setMicPermission('granted');
+      showToast(lang === 'ar' ? 'تم تشغيل كاشف الضوضاء بنجاح' : 'Noise detector activated', 'success');
+    } else {
+      setIsNoiseMonitoring(false);
     }
   };
+
+  const requestMicPermission = toggleNoiseMonitoring;
   const [currentNoiseLevel, setCurrentNoiseLevel] = useState(0);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -753,8 +791,7 @@ function AppContent() {
         await localDB.savePatient(v);
       }
       localStorage.setItem('smart_audiometry_seeded_timeline_v1', 'true');
-      const updated = await localDB.getAllPatients();
-      setPatients(updated);
+      await fetchPatients();
       showToast(
         lang === 'ar'
           ? 'تم تحميل سجلات الزيارات التتابعية النموذجية بنجاح'
@@ -867,6 +904,15 @@ function AppContent() {
     handleViewChange('new-patient');
   };
 
+  const sortPatientsDesc = (list: Patient[]): Patient[] => {
+    return [...list].sort((a, b) => {
+      const timeA = new Date(a.visitDate || a.createdAt || 0).getTime();
+      const timeB = new Date(b.visitDate || b.createdAt || 0).getTime();
+      if (timeB !== timeA) return timeB - timeA;
+      return Number(b.id || 0) - Number(a.id || 0);
+    });
+  };
+
   const fetchPatients = async () => {
     try {
       let data = await localDB.getAllPatients();
@@ -878,7 +924,7 @@ function AppContent() {
         localStorage.setItem('smart_audiometry_seeded_timeline_v1', 'true');
         data = await localDB.getAllPatients();
       }
-      setPatients(data);
+      setPatients(sortPatientsDesc(data));
     } catch (err) {
       console.error('Failed to fetch patients');
     }
@@ -888,7 +934,6 @@ function AppContent() {
     const errors: Record<string, string> = {};
     if (!formData.name?.trim()) errors.name = t.errorNameRequired;
     if (!formData.age || formData.age <= 0) errors.age = t.errorAgeRequired;
-    if (!formData.phone?.trim()) errors.phone = t.errorPhoneRequired;
     if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       errors.email = t.errorInvalidEmail;
     }
@@ -1084,6 +1129,18 @@ function AppContent() {
       return;
     }
 
+    // Check subscription / trial limit
+    if (!subscription.isActivated && subscription.trialReportsUsed >= TRIAL_MAX_REPORTS) {
+      setIsActivationModalOpen(true);
+      showToast(
+        lang === 'ar'
+          ? '⚠️ انتهت الفترة المجانية (3 تقارير). يرجى الاشتراك لتفعيل النظام.'
+          : '⚠️ Free trial expired (3 reports). Please activate a subscription.',
+        'error'
+      );
+      return;
+    }
+
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       showToast(
         lang === 'ar'
@@ -1134,18 +1191,28 @@ function AppContent() {
         return updated;
       });
 
-      const modelLabel = getModelDisplayName(activeModel);
-      showToast(
-        lang === 'ar' 
-          ? `تم التحليل ومطابقة الفحوصات بنجاح عبر الذكاء الاصطناعي (${modelLabel})` 
-          : `AI Multi-Test Clinical Analysis completed via ${modelLabel}`,
-        'success'
-      );
-    } catch {
+      // If user is in free trial, record report usage
+      if (!subscription.isActivated) {
+        await incrementTrialReportUsage();
+        await refreshSubscriptionStatus();
+      }
+
       showToast(
         lang === 'ar'
-          ? '⚠️ لا يوجد اتصال بالإنترنت! يرجى الاتصال بالإنترنت لإجراء التحليل والتشخيص المباشر عبر نماذج الذكاء الاصطناعي مفتوحة المصدر.'
-          : '⚠️ No internet connection! Please connect to the internet to run live Open-Source AI analysis and diagnosis.',
+          ? 'تم إعداد التفسير السمعي المساعد. يرجى مراجعة التقرير مع اختصاصي السمعيات.'
+          : 'AI-assisted audiology interpretation is ready. Please review it with an audiologist.',
+        'success'
+      );
+    } catch (error) {
+      const providerUnavailable = error instanceof Error && error.message === 'AI_PROVIDER_UNAVAILABLE';
+      showToast(
+        lang === 'ar'
+          ? providerUnavailable
+            ? 'تعذر الوصول إلى نموذج الذكاء الاصطناعي حالياً؛ لم يتم إنشاء تقرير تشخيصي. حاول مجدداً لاحقاً.'
+            : '⚠️ لا يوجد اتصال بالإنترنت! يرجى الاتصال بالإنترنت لإجراء التحليل والتشخيص عبر نماذج الذكاء الاصطناعي.'
+          : providerUnavailable
+            ? 'The AI provider is currently unavailable; no diagnostic report was generated. Please try again later.'
+            : '⚠️ No internet connection! Please connect to the internet to run AI analysis.',
         'error'
       );
     } finally {
@@ -1269,6 +1336,17 @@ function AppContent() {
   };
 
   const handlePrintPreview = async (scope: 'all' | 'current' | any = 'all') => {
+    if (!subscription.isActivated && subscription.trialReportsUsed >= TRIAL_MAX_REPORTS) {
+      setIsActivationModalOpen(true);
+      showToast(
+        lang === 'ar'
+          ? '⚠️ انتهت الفترة المجانية (3 تقارير). يرجى الاشتراك لتفعيل النظام.'
+          : '⚠️ Free trial expired (3 reports). Please activate a subscription.',
+        'error'
+      );
+      return;
+    }
+
     const validScope = scope === 'current' ? 'current' : 'all';
     try {
       const pdf = await generatePDF(validScope);
@@ -1285,6 +1363,17 @@ function AppContent() {
   };
 
   const exportPDF = async (scope: 'all' | 'current' | any = 'all') => {
+    if (!subscription.isActivated && subscription.trialReportsUsed >= TRIAL_MAX_REPORTS) {
+      setIsActivationModalOpen(true);
+      showToast(
+        lang === 'ar'
+          ? '⚠️ انتهت الفترة المجانية (3 تقارير). يرجى الاشتراك لتفعيل النظام.'
+          : '⚠️ Free trial expired (3 reports). Please activate a subscription.',
+        'error'
+      );
+      return;
+    }
+
     const validScope = scope === 'current' ? 'current' : 'all';
     try {
       const pdf = await generatePDF(validScope);
@@ -1401,9 +1490,11 @@ function AppContent() {
     }
   };
 
-  const filteredPatients = patients.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.phone.includes(searchQuery)
+  const filteredPatients = sortPatientsDesc(
+    patients.filter(p => 
+      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (p.phone && p.phone.includes(searchQuery))
+    )
   );
 
   const analysis = formData.data ? analyzeHearing(formData.data) : null;
@@ -1453,7 +1544,7 @@ function AppContent() {
 
   return (
     <div 
-      className={`flex h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-300 ${isRTL ? 'rtl' : 'ltr'}`} 
+      className={`flex h-[100dvh] h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-300 ${isRTL ? 'rtl' : 'ltr'}`} 
       dir={isRTL ? 'rtl' : 'ltr'}
       translate="no"
     >
@@ -1561,6 +1652,13 @@ function AppContent() {
               <span>{lang === 'en' ? 'Clinic Settings' : 'إعدادات العيادة'}</span>
             </button>
             <button 
+              onClick={() => { setIsSidebarOpen(false); setIsActivationModalOpen(true); }}
+              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-teal-700 dark:text-teal-300 bg-teal-50/60 dark:bg-teal-950/30 border border-teal-200/80 dark:border-teal-900/40 hover:bg-teal-100/80 dark:hover:bg-teal-900/60 transition-all shadow-xs"
+            >
+              <Key size={18} className="text-teal-600 dark:text-teal-400" />
+              <span>{lang === 'ar' ? 'تفعيل النظام والاشتراكات 🔑' : 'Activate & Subscriptions 🔑'}</span>
+            </button>
+            <button 
               onClick={handleExportPatients}
               className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-all"
             >
@@ -1628,10 +1726,10 @@ function AppContent() {
             )}
 
             {/* Room noise indicator */}
-            <div className="hidden md:flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
               <button 
-                onClick={isNoiseMonitoring ? () => setIsNoiseMonitoring(false) : requestMicPermission}
-                className={`p-2 rounded-xl transition-all ${
+                onClick={toggleNoiseMonitoring}
+                className={`p-2 rounded-xl transition-all active:scale-95 touch-manipulation ${
                   isNoiseMonitoring 
                     ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/60' 
                     : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
@@ -1640,13 +1738,37 @@ function AppContent() {
               >
                 {isNoiseMonitoring ? <MicOff size={18} /> : <Mic size={18} />}
               </button>
-              <LiveNoiseIndicator 
-                level={currentNoiseLevel} 
-                isActive={isNoiseMonitoring} 
-                threshold={30} 
-                lang={lang} 
-              />
+              <div className="hidden sm:block">
+                <LiveNoiseIndicator 
+                  level={currentNoiseLevel} 
+                  isActive={isNoiseMonitoring} 
+                  threshold={30} 
+                  lang={lang} 
+                />
+              </div>
             </div>
+
+            {/* Subscription / Activation Status Badge */}
+            <button
+              onClick={() => setIsActivationModalOpen(true)}
+              className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs active:scale-95 touch-manipulation ${
+                subscription.isActivated
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                  : subscription.trialExpired
+                  ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 animate-pulse'
+                  : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+              }`}
+              title={lang === 'ar' ? 'إدارة الاشتراك والتفعيل' : 'Subscription & Activation'}
+            >
+              <Key size={14} className={subscription.isActivated ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'} />
+              <span className="hidden sm:inline">
+                {subscription.isActivated
+                  ? (lang === 'ar' ? `مفعّل (${subscription.plan === 'yearly' ? 'سنوي' : subscription.plan === 'monthly' ? 'شهري' : 'دائم'})` : 'Active Pro')
+                  : subscription.trialExpired
+                  ? (lang === 'ar' ? 'انتهت التجربة (تفعيل)' : 'Trial Expired')
+                  : (lang === 'ar' ? `تجريبي (${subscription.trialReportsUsed}/${TRIAL_MAX_REPORTS})` : `Trial (${subscription.trialReportsUsed}/${TRIAL_MAX_REPORTS})`)}
+              </span>
+            </button>
 
             {/* Dark Mode Switcher */}
             <button 
@@ -1870,8 +1992,8 @@ function AppContent() {
 
                     <div className="pt-4 mt-2 border-t border-slate-100 dark:border-slate-800 flex gap-2">
                       <button
-                        onClick={isNoiseMonitoring ? () => setIsNoiseMonitoring(false) : requestMicPermission}
-                        className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                        onClick={toggleNoiseMonitoring}
+                        className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 active:scale-95 touch-manipulation ${
                           isNoiseMonitoring 
                             ? 'bg-rose-600 hover:bg-rose-700 text-white' 
                             : 'bg-teal-600 hover:bg-teal-700 text-white'
@@ -3893,11 +4015,16 @@ function AppContent() {
                               <div className={isRTL ? 'text-right' : 'text-left'}>
                                 <h2 className="text-1xl font-black text-[#1e3a5f]  uppercase leading-none mb-1">
                                   {lang === 'ar'
-                                    ? `التحليل والتشخيص السريري بالذكاء الاصطناعي (${getModelDisplayName(geminiModel)})`
-                                    : `Clinical AI Diagnostic Report (${getModelDisplayName(geminiModel)})`}
+                                    ? 'التفسير السمعي المساعد بالذكاء الاصطناعي'
+                                    : 'AI-Assisted Audiology Interpretation'}
                                 </h2>
                                 <p className="text-slate-400 text-[10px] font-black uppercase ">
-                                  {t.clinicalReport} • {isOpenSourceModel(geminiModel) ? 'OPEN-SOURCE AI' : 'GEMINI AI'} • PAGE 03
+                                  {t.clinicalReport} • AI-ASSISTED • PAGE 03
+                                </p>
+                                <p className="text-[10px] text-amber-700 font-semibold mt-1">
+                                  {lang === 'ar'
+                                    ? 'تفسير مساعد للقياسات، وليس تشخيصاً نهائياً؛ يلزم اعتماد اختصاصي السمعيات.'
+                                    : 'Decision support only, not a final diagnosis; specialist review is required.'}
                                 </p>
                               </div>
                             </div>
@@ -5039,12 +5166,15 @@ function AppContent() {
           </motion.div>
         )}
       </AnimatePresence>
-      {isNoiseMonitoring && currentView !== 'new-patient' && (
-        <div className="fixed bottom-24 right-8 z-50 w-72">
+      {isNoiseMonitoring && currentView !== 'new-patient' && currentView !== 'noise-check' && (
+        <div className="fixed bottom-4 right-4 left-4 sm:left-auto sm:w-80 z-40 max-w-[calc(100vw-2rem)]">
           <NoiseMonitor 
             lang={lang} 
             isActive={isNoiseMonitoring}
-            onToggle={setIsNoiseMonitoring}
+            onToggle={(active) => {
+              if (!active) noiseDetector.stop();
+              setIsNoiseMonitoring(active);
+            }}
             onNoiseLevelChange={(level) => {
               setCurrentNoiseLevel(level);
             }}
@@ -5055,6 +5185,23 @@ function AppContent() {
           />
         </div>
       )}
+      {/* License & Subscription Activation Modal */}
+      <ActivationModal 
+        isOpen={isActivationModalOpen}
+        onClose={() => setIsActivationModalOpen(false)}
+        status={subscription}
+        lang={lang}
+        canDismiss={!subscription.trialExpired || subscription.isActivated}
+        onActivationSuccess={async () => {
+          await refreshSubscriptionStatus();
+          showToast(
+            lang === 'ar'
+              ? '🎉 تم تفعيل النظام بنجاح! يمكنك الآن الاستخدام دون أي قيود.'
+              : '🎉 System activated successfully! Unlimited access granted.',
+            'success'
+          );
+        }}
+      />
     </div>
   );
 }

@@ -1,10 +1,8 @@
 {
-  "projectId": "dev-moment-488501-m0",
-  "appId": "1:556000995917:web:2723d34fcf70fdf4af4a04",
-  "apiKey": "AIzaSyBOn2U3QFuVxiRWLJneXnw1J3KorcJJe9Y",
-  "authDomain": "dev-moment-488501-m0.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-7ddb9025-2f9b-40be-9d1a-87ed65a2598a",
-  "storageBucket": "dev-moment-488501-m0.firebasestorage.app",
-  "messagingSenderId": "556000995917",
-  "measurementId": ""
+  "apiKey": "AIzaSyCuqCLhklIi5jKt-Ytm_kKS9gbzERNHqAE",
+  "authDomain": "star-1991.firebaseapp.com",
+  "projectId": "star-1991",
+  "storageBucket": "star-1991.firebasestorage.app",
+  "messagingSenderId": "98296820399",
+  "appId": "1:98296820399:web:0a31bf953f01d46a699a5a"
 }

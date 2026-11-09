@@ -133,6 +133,22 @@ service cloud.firestore {
       allow delete: if isAuthenticated() && (isAdmin() || resource.data.uid == request.auth.uid);
     }
 
+    // A client can redeem a key only by its document ID. Key inventory cannot be listed,
+    // and a redeemed key cannot be moved to another device or edited otherwise.
+    match /activation_keys/{keyId} {
+      allow get: if true;
+      allow list: if false;
+      allow update: if
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['isUsed', 'deviceId', 'activatedAt']) &&
+        request.resource.data.isUsed == true &&
+        request.resource.data.deviceId is string &&
+        request.resource.data.activatedAt is timestamp &&
+        request.resource.data.activatedAt == request.time &&
+        (!('isUsed' in resource.data) || resource.data.isUsed != true);
+      allow create, delete: if isAdmin();
+    }
+
     // Default deny
     match /{document=**} {
       allow read, write: if false;

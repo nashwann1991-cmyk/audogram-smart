@@ -1,19 +1,25 @@
-﻿node_modules/
-**/node_modules/
-**/win-unpacked/
-dist/
-build/
-release/
-out/
-*.asar
-*.exe
-*.rar
-*.7z
+# Environment secrets
 .env
 .env.*
 !.env.example
-serviceAccountKey.json
-**/serviceAccountKey.json
+
+# Google Cloud / Firebase credentials
+firebase-service-account.json
+firebase-adminsdk*.json
+serviceAccountKey*.json
+
+# Dependencies and builds
+node_modules/
+dist/
+build/
+# Electron build outputs
+**/win-unpacked/
+**/dist/
+**/build/
+
+# Large application packages
+*.asar
+*.exe
+
+# Installer artifacts
 *.blockmap
-**/builder-debug.yml
-**/builder-effective-config.yaml

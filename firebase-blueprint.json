@@ -58,6 +58,20 @@
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
       },
       "required": ["content", "uid", "createdAt"]
+    },
+    "ActivationKey": {
+      "title": "ActivationKey",
+      "description": "Software license activation key",
+      "type": "object",
+      "properties": {
+        "key": { "type": "string", "description": "Activation key code" },
+        "plan": { "type": "string", "enum": ["monthly", "yearly", "lifetime"], "description": "Subscription plan type" },
+        "days": { "type": "number", "description": "Number of active days" },
+        "isUsed": { "type": "boolean", "description": "Whether the key has been activated" },
+        "deviceId": { "type": "string", "description": "Hardware/device ID that activated the key" },
+        "activatedAt": { "type": "string", "format": "date-time", "description": "Timestamp when key was activated" },
+        "expiresAt": { "type": "string", "description": "Expiration date" }
+      }
     }
   },
   "firestore": {
@@ -76,6 +90,10 @@
     "/notes/{noteId}": {
       "schema": "Note",
       "description": "Quick notes"
+    },
+    "/activation_keys/{keyId}": {
+      "schema": "ActivationKey",
+      "description": "Collection of software license activation keys"
     }
   }
 }

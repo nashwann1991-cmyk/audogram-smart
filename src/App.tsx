@@ -58,6 +58,8 @@ import {
   verifyClientAIModelOrKey,
   getOpenSourceDesktopClinicalDiagnosis,
 } from './services/aiService';
+import { AIProviderRateLimitError } from './services/pollinationsClient';
+import { buildLocalAudiologyAdvice } from './services/localAudiologyAnalysis';
 import { ActivationModal } from './components/ActivationModal';
 import { 
   getSubscriptionStatus, 
@@ -1141,16 +1143,6 @@ function AppContent() {
       return;
     }
 
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      showToast(
-        lang === 'ar'
-          ? '⚠️ لا يوجد اتصال بالإنترنت! يرجى الاتصال بالإنترنت لإجراء التحليل والتشخيص عبر نماذج الذكاء الاصطناعي مفتوحة المصدر.'
-          : '⚠️ No internet connection! Please connect to the internet to run AI analysis and diagnosis.',
-        'error'
-      );
-      return;
-    }
-    
     setIsAnalyzing(true);
     try {
       const activeApiKey = geminiApiKey.trim() || getStoredGeminiApiKey();
@@ -1169,22 +1161,36 @@ function AppContent() {
 
       const diagnosis = aiResult.diagnosis.trim();
       let patientAdvice = formData.patientAdvice || '';
-      try {
-        const adviceResult = await runClientAIPatientAdvice(
-          formData,
-          lang,
-          activeApiKey || undefined,
-          activeModel
-        );
-        if (adviceResult.advice && adviceResult.advice.trim()) {
-          patientAdvice = adviceResult.advice.trim();
+      let patientAdviceSource = formData.patientAdviceSource;
+      if (aiResult.source === 'local') {
+        patientAdvice = buildLocalAudiologyAdvice(formData, lang);
+        patientAdviceSource = 'local';
+      } else {
+        try {
+          const adviceResult = await runClientAIPatientAdvice(
+            formData,
+            lang,
+            activeApiKey || undefined,
+            activeModel
+          );
+          if (adviceResult.advice && adviceResult.advice.trim()) {
+            patientAdvice = adviceResult.advice.trim();
+            patientAdviceSource = adviceResult.isAiPowered ? 'ai' : 'local';
+          }
+        } catch {
+          patientAdvice = buildLocalAudiologyAdvice(formData, lang);
+          patientAdviceSource = 'local';
         }
-      } catch {
-        // Keep existing advice if secondary call times out
       }
 
       setFormData(prev => {
-        const updated = { ...prev, diagnosis, patientAdvice };
+        const updated = {
+          ...prev,
+          diagnosis,
+          diagnosisSource: aiResult.source,
+          patientAdvice,
+          patientAdviceSource,
+        };
         if (updated.id) {
           localDB.savePatient(updated);
         }
@@ -1198,21 +1204,35 @@ function AppContent() {
       }
 
       showToast(
-        lang === 'ar'
-          ? 'تم إعداد التفسير السمعي المساعد. يرجى مراجعة التقرير مع اختصاصي السمعيات.'
-          : 'AI-assisted audiology interpretation is ready. Please review it with an audiologist.',
+        aiResult.source === 'local'
+          ? lang === 'ar'
+            ? 'تعذر مزود الذكاء الاصطناعي؛ أُنشئ التقرير محلياً من القياسات المسجلة دون اتصال.'
+            : 'AI unavailable; a local report was generated from the recorded measurements.'
+          : lang === 'ar'
+            ? 'تم إعداد التفسير السمعي المساعد. يرجى مراجعة التقرير مع اختصاصي السمعيات.'
+            : 'AI-assisted audiology interpretation is ready. Please review it with an audiologist.',
         'success'
       );
     } catch (error) {
       const providerUnavailable = error instanceof Error && error.message === 'AI_PROVIDER_UNAVAILABLE';
+      const rateLimitSeconds = error instanceof AIProviderRateLimitError
+        ? error.retryAfterSeconds
+        : null;
+      const retryMinutes = rateLimitSeconds !== null
+        ? Math.max(1, Math.ceil(rateLimitSeconds / 60))
+        : null;
       showToast(
         lang === 'ar'
-          ? providerUnavailable
-            ? 'تعذر الوصول إلى نموذج الذكاء الاصطناعي حالياً؛ لم يتم إنشاء تقرير تشخيصي. حاول مجدداً لاحقاً.'
-            : '⚠️ لا يوجد اتصال بالإنترنت! يرجى الاتصال بالإنترنت لإجراء التحليل والتشخيص عبر نماذج الذكاء الاصطناعي.'
-          : providerUnavailable
-            ? 'The AI provider is currently unavailable; no diagnostic report was generated. Please try again later.'
-            : '⚠️ No internet connection! Please connect to the internet to run AI analysis.',
+          ? retryMinutes !== null
+            ? `بلغ النموذج المجاني حد الطلبات. انتظر ${retryMinutes} دقيقة ثم أعد المحاولة.`
+            : providerUnavailable
+              ? 'تعذر الوصول إلى نموذج الذكاء الاصطناعي حالياً؛ لم يتم إنشاء تقرير تشخيصي. حاول مجدداً لاحقاً.'
+              : '⚠️ تعذر الاتصال بالإنترنت. تحقق من اتصالك ثم أعد المحاولة.'
+          : retryMinutes !== null
+            ? `The free AI provider is rate-limited. Please wait about ${retryMinutes} minute(s) and try again.`
+            : providerUnavailable
+              ? 'The AI provider is currently unavailable; no diagnostic report was generated. Please try again later.'
+              : '⚠️ Could not connect to the internet. Check your connection and try again.',
         'error'
       );
     } finally {
@@ -4014,17 +4034,23 @@ function AppContent() {
                               </div>
                               <div className={isRTL ? 'text-right' : 'text-left'}>
                                 <h2 className="text-1xl font-black text-[#1e3a5f]  uppercase leading-none mb-1">
-                                  {lang === 'ar'
-                                    ? 'التفسير السمعي المساعد بالذكاء الاصطناعي'
-                                    : 'AI-Assisted Audiology Interpretation'}
+                                  {formData.diagnosisSource === 'local'
+                                    ? lang === 'ar' ? 'التحليل السمعي المحلي' : 'Local Audiology Analysis'
+                                    : lang === 'ar'
+                                      ? 'التفسير السمعي المساعد بالذكاء الاصطناعي'
+                                      : 'AI-Assisted Audiology Interpretation'}
                                 </h2>
                                 <p className="text-slate-400 text-[10px] font-black uppercase ">
-                                  {t.clinicalReport} • AI-ASSISTED • PAGE 03
+                                  {t.clinicalReport} • {formData.diagnosisSource === 'local' ? 'LOCAL RULE-BASED' : 'AI-ASSISTED'} • PAGE 03
                                 </p>
                                 <p className="text-[10px] text-amber-700 font-semibold mt-1">
-                                  {lang === 'ar'
-                                    ? 'تفسير مساعد للقياسات، وليس تشخيصاً نهائياً؛ يلزم اعتماد اختصاصي السمعيات.'
-                                    : 'Decision support only, not a final diagnosis; specialist review is required.'}
+                                  {formData.diagnosisSource === 'local'
+                                    ? lang === 'ar'
+                                      ? 'تحليل محلي مباشر دون نموذج ذكاء اصطناعي؛ ليس تشخيصاً نهائياً ويحتاج مراجعة اختصاصي السمعيات.'
+                                      : 'Direct local analysis without an AI model; not a final diagnosis and requires audiologist review.'
+                                    : lang === 'ar'
+                                      ? 'تفسير مساعد للقياسات، وليس تشخيصاً نهائياً؛ يلزم اعتماد اختصاصي السمعيات.'
+                                      : 'Decision support only, not a final diagnosis; specialist review is required.'}
                                 </p>
                               </div>
                             </div>
@@ -4105,7 +4131,11 @@ function AppContent() {
                     onToggleIncludeInPrint={setIncludeAdviceInPrint}
                     onUpdateAdvice={(newAdvice, isAiGenerated) => {
                       setFormData(prev => {
-                        const updated = { ...prev, patientAdvice: newAdvice };
+                        const updated = {
+                          ...prev,
+                          patientAdvice: newAdvice,
+                          patientAdviceSource: isAiGenerated ? ('ai' as const) : ('local' as const),
+                        };
                         if (updated.id) {
                           localDB.savePatient(updated);
                         }

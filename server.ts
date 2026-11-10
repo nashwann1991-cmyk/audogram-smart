@@ -5,6 +5,7 @@ import dns from "dns";
 import dotenv from "dotenv";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { buildClinicalDiagnosisPrompt, getDeidentifiedAudiologyData } from "./src/services/clinicalDiagnosisPrompt";
+import { AIProviderRateLimitError, requestPollinationsChatCompletion } from "./src/services/pollinationsClient";
 
 // Force IPv4 resolution first to prevent Node 22 undici IPv6 HeadersTimeoutError in Cloud Run containers
 dns.setDefaultResultOrder("ipv4first");
@@ -187,46 +188,22 @@ async function generateWithOpenSourceModel(
     }
   }
 
-  // 4. Zero-key Free Open-Source Inference via Pollinations OpenAI-compatible endpoint
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  // 4. Zero-key inference via Pollinations; respect its anonymous-IP cooldown.
   try {
-    const resp = await fetch("https://text.pollinations.ai/openai", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: spec.pollinationsModel,
-        temperature,
-        messages: [
-          {
-            role: "system",
-            content: `${systemInstruction}\nYou are running as ${spec.displayName}.`,
-          },
-          { role: "user", content: prompt },
-        ],
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (resp.ok) {
-      const contentType = resp.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const data: any = await resp.json();
-        const text = data?.choices?.[0]?.message?.content?.trim();
-        if (text && text.length > 2) {
-          return { text, providerUsed: "free-open-source" };
-        }
-      } else {
-        const rawText = (await resp.text()).trim();
-        if (rawText && rawText.length > 2 && !rawText.startsWith("<!DOCTYPE")) {
-          return { text: rawText, providerUsed: "free-open-source" };
-        }
-      }
-    }
-  } catch {
-    clearTimeout(timeout);
+    const text = await requestPollinationsChatCompletion(
+      spec.pollinationsModel,
+      [
+        {
+          role: "system",
+          content: `${systemInstruction}\nYou are running as ${spec.displayName}.`,
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature
+    );
+    if (text.length > 2) return { text, providerUsed: "free-open-source" };
+  } catch (error) {
+    if (error instanceof AIProviderRateLimitError) throw error;
   }
 
   return null;
@@ -306,6 +283,13 @@ app.post("/api/ai-verify-key", async (req, res) => {
     }
     return res.status(400).json({ valid: false, error: "Empty response from Gemini API" });
   } catch (err: any) {
+    if (err instanceof AIProviderRateLimitError) {
+      return res.status(429).json({
+        valid: false,
+        error: err.message,
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
+    }
     return res.status(400).json({
       valid: false,
       error: err?.message || "Failed to verify API key"
@@ -385,6 +369,13 @@ app.post("/api/ai-diagnosis", async (req, res) => {
     }
     return res.json({ diagnosis, model: selectedModel, usedCustomKey: !!customKey });
   } catch (err: any) {
+    if (err instanceof AIProviderRateLimitError) {
+      return res.status(429).json({
+        diagnosis: null,
+        error: err.message,
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
+    }
     return res.status(503).json({
       diagnosis: null,
       error: "NO_INTERNET_CONNECTION",
@@ -484,6 +475,13 @@ Generate personalized hearing conservation tips and patient advice in ${isArabic
     }
     return res.json({ advice, model: selectedModel, usedCustomKey: !!customKey });
   } catch (err: any) {
+    if (err instanceof AIProviderRateLimitError) {
+      return res.status(429).json({
+        advice: null,
+        error: err.message,
+        retryAfterSeconds: err.retryAfterSeconds,
+      });
+    }
     return res.status(503).json({ advice: null, error: "NO_INTERNET_CONNECTION" });
   }
 });

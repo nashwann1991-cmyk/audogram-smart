@@ -28,6 +28,11 @@ contact details, visit dates, and free-text notes are excluded from AI requests;
 measurements and limited demographic context are sent to the selected AI provider.
 No-key provider availability and the actual model served can vary.
 
+If an AI provider is unavailable or offline, the app generates a local
+rule-based audiology report from the visit's recorded AC/BC thresholds,
+tympanometry, speech scores, and acoustic reflexes. The report is labeled
+`LOCAL RULE-BASED`; it does not call an AI service or claim a definitive diagnosis.
+
 ## Firebase License Activation
 
 The app connects to the `star-1991` Firebase project. Add each activation key as a

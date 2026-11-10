@@ -80,7 +80,9 @@ export interface Patient {
   notes: string;
   data: AudiometryData;
   diagnosis?: string;
+  diagnosisSource?: 'ai' | 'local';
   patientAdvice?: string;
+  patientAdviceSource?: 'ai' | 'local';
   summary?: string;
   feedback?: Feedback;
   ambientNoise?: number;

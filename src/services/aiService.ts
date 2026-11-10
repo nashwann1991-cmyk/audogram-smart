@@ -1,7 +1,9 @@
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import { Patient } from "../types";
-import { Language, translations } from "../translations";
+import { Language } from "../translations";
 import { buildClinicalDiagnosisPrompt, getDeidentifiedAudiologyData } from "./clinicalDiagnosisPrompt";
+import { AIProviderRateLimitError, requestPollinationsChatCompletion } from "./pollinationsClient";
+import { buildLocalAudiologyAdvice, buildLocalAudiologyReport } from "./localAudiologyAnalysis";
 
 export const GEMINI_API_KEY_STORAGE_KEY = 'gemini_api_key';
 export const GEMINI_MODEL_STORAGE_KEY = 'gemini_preferred_model';
@@ -348,46 +350,21 @@ export async function callClientOpenSourceLLM(
 
   // 4. Free Keyless Open-Source Inference directly from Client over the Internet
   const pollinationsModel = mapToPollinationsModel(modelId);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 9000);
   try {
-    const response = await fetch('https://text.pollinations.ai/openai', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: pollinationsModel,
-        messages: [
-          {
-            role: 'system',
-            content: `${systemInstruction}\nYou are running as the open-source clinical model ${modelDisplay}.`,
-          },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.25,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (response.ok) {
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const data: any = await response.json();
-        const content = data?.choices?.[0]?.message?.content;
-        if (content && typeof content === 'string' && content.trim().length > 20) {
-          return content.trim();
-        }
-      } else {
-        const rawText = await response.text();
-        if (rawText && rawText.trim().length > 20 && !rawText.trim().startsWith('<!DOCTYPE')) {
-          return rawText.trim();
-        }
-      }
-    }
-  } catch {
-    clearTimeout(timeout);
+    const content = await requestPollinationsChatCompletion(
+      pollinationsModel,
+      [
+        {
+          role: 'system',
+          content: `${systemInstruction}\nYou are running as the open-source clinical model ${modelDisplay}.`,
+        },
+        { role: 'user', content: userPrompt },
+      ],
+      0.25
+    );
+    if (content.length > 20) return content;
+  } catch (error) {
+    if (error instanceof AIProviderRateLimitError) throw error;
   }
 
   return '';
@@ -413,10 +390,17 @@ export async function runClientAIDiagnosis(
   lang: Language = 'ar',
   apiKey?: string,
   model?: string
-): Promise<{ diagnosis: string; isAiPowered: boolean; modelUsed: string }> {
+): Promise<{ diagnosis: string; isAiPowered: boolean; modelUsed: string; source: 'ai' | 'local' }> {
+  const localFallback = () => ({
+    diagnosis: buildLocalAudiologyReport(patient, lang),
+    isAiPowered: false,
+    modelUsed: 'local-rules',
+    source: 'local' as const,
+  });
+
   const isOnline = await checkLiveInternetConnection();
   if (!isOnline) {
-    throw new Error('NO_INTERNET_CONNECTION');
+    return localFallback();
   }
 
   const activeKey = (apiKey ?? getStoredGeminiApiKey()).trim();
@@ -428,7 +412,7 @@ export async function runClientAIDiagnosis(
   // Step 1: If running over HTTP/HTTPS (not file:// desktop protocol), try backend /api/ai-diagnosis first
   if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 35000);
+    const timer = setTimeout(() => ctrl.abort(), 95000);
     try {
       const response = await fetch('/api/ai-diagnosis', {
         method: 'POST',
@@ -445,6 +429,9 @@ export async function runClientAIDiagnosis(
         signal: ctrl.signal,
       });
       clearTimeout(timer);
+      if (response.status === 429) {
+        return localFallback();
+      }
       if (response.ok) {
         const resData = await response.json();
         if (resData?.diagnosis && typeof resData.diagnosis === 'string' && resData.diagnosis.trim().length > 20) {
@@ -452,28 +439,35 @@ export async function runClientAIDiagnosis(
             diagnosis: resData.diagnosis.trim(),
             isAiPowered: true,
             modelUsed: activeModel,
+            source: 'ai',
           };
         }
       }
-    } catch {
+    } catch (error) {
       clearTimeout(timer);
+      if (error instanceof AIProviderRateLimitError) return localFallback();
     }
   }
 
   // Step 2: Direct Client-Side Online AI Execution (for Desktop App or direct browser call)
   if (useOpenSource) {
-    const ossDiagnosis = await callClientOpenSourceLLM(
-      systemInstruction,
-      prompt,
-      activeModel,
-      activeKey
-    );
-    if (ossDiagnosis && ossDiagnosis.trim().length > 20) {
-      return {
-        diagnosis: ossDiagnosis.trim(),
-        isAiPowered: true,
-        modelUsed: activeModel,
-      };
+    try {
+      const ossDiagnosis = await callClientOpenSourceLLM(
+        systemInstruction,
+        prompt,
+        activeModel,
+        activeKey
+      );
+      if (ossDiagnosis && ossDiagnosis.trim().length > 20) {
+        return {
+          diagnosis: ossDiagnosis.trim(),
+          isAiPowered: true,
+          modelUsed: activeModel,
+          source: 'ai',
+        };
+      }
+    } catch (error) {
+      if (error instanceof AIProviderRateLimitError) return localFallback();
     }
   }
 
@@ -497,24 +491,20 @@ export async function runClientAIDiagnosis(
           diagnosis: response.text.trim(),
           isAiPowered: true,
           modelUsed: activeModel,
+          source: 'ai',
         };
       }
-    } catch {
+    } catch (error) {
       // Proceed to online cross-matching verification
+      if (error instanceof AIProviderRateLimitError) throw error;
     }
   }
 
-  // Step 3: Verify internet was not disconnected mid-request; if connected, run Online Multi-Test Cross-Matching synthesis
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    throw new Error('NO_INTERNET_CONNECTION');
-  }
-
-  throw new Error('AI_PROVIDER_UNAVAILABLE');
+  return localFallback();
 }
 
 /**
- * Unified Online AI Patient Conservation Advice Runner.
- * Strictly requires an active internet connection.
+ * Generates patient conservation advice with a local fallback when AI is unavailable.
  */
 export async function runClientAIPatientAdvice(
   patient: Partial<Patient>,
@@ -524,7 +514,10 @@ export async function runClientAIPatientAdvice(
 ): Promise<{ advice: string; isAiPowered: boolean }> {
   const isOnline = await checkLiveInternetConnection();
   if (!isOnline) {
-    throw new Error('NO_INTERNET_CONNECTION');
+    return {
+      advice: buildLocalAudiologyAdvice(patient, lang),
+      isAiPowered: false,
+    };
   }
 
   const activeKey = (apiKey ?? getStoredGeminiApiKey()).trim();
@@ -596,9 +589,18 @@ Patient Profile:
 
   // 2. Direct Client Open-Source Inference over the internet
   if (useOpenSource) {
-    const advice = await callClientOpenSourceLLM(systemInstruction, prompt, activeModel, activeKey);
-    if (advice && advice.trim().length > 20) {
-      return { advice: advice.trim(), isAiPowered: true };
+    try {
+      const advice = await callClientOpenSourceLLM(systemInstruction, prompt, activeModel, activeKey);
+      if (advice && advice.trim().length > 20) {
+        return { advice: advice.trim(), isAiPowered: true };
+      }
+    } catch (error) {
+      if (
+        !(error instanceof AIProviderRateLimitError) &&
+        !(error instanceof Error && error.message === 'NO_INTERNET_CONNECTION')
+      ) {
+        throw error;
+      }
     }
   } else {
     const resolvedGeminiKey = activeKey.startsWith('AIza') ? activeKey : (process.env.GEMINI_API_KEY || '');
@@ -628,10 +630,9 @@ Patient Profile:
     throw new Error('NO_INTERNET_CONNECTION');
   }
 
-  const { getLocalPatientAdvice } = await import('./localAnalysisService');
   return {
-    advice: getLocalPatientAdvice(patient, lang),
-    isAiPowered: true,
+    advice: buildLocalAudiologyAdvice(patient, lang),
+    isAiPowered: false,
   };
 }
 
@@ -757,4 +758,3 @@ export async function getAISummary(diagnosis: string, lang: Language = 'en') {
     return "";
   }
 }
-

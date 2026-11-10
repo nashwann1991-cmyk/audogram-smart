@@ -35,8 +35,10 @@ export const PatientAdvice: React.FC<PatientAdviceProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
   const [offlineError, setOfflineError] = useState<string | null>(null);
-  const [lastSource, setLastSource] = useState<'ai' | 'profile'>(
-    patient.patientAdvice ? 'ai' : 'profile'
+  const [lastSource, setLastSource] = useState<'ai' | 'profile' | 'unknown'>(
+    patient.patientAdviceSource === 'local'
+      ? 'profile'
+      : patient.patientAdviceSource ?? (patient.patientAdvice ? 'unknown' : 'profile')
   );
 
   const t = translations[lang];
@@ -56,15 +58,6 @@ export const PatientAdvice: React.FC<PatientAdviceProps> = ({
 
   const handleGenerateAdvice = async () => {
     setOfflineError(null);
-    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      setOfflineError(
-        lang === 'ar'
-          ? '⚠️ لا يوجد اتصال بالإنترنت! يرجى الاتصال بالإنترنت لإجراء التحليل عبر نماذج الذكاء الاصطناعي مفتوحة المصدر.'
-          : '⚠️ No internet connection! Please connect to the internet to run live Open-Source AI analysis.'
-      );
-      return;
-    }
-
     setIsGenerating(true);
     try {
       const result = await runClientAIPatientAdvice(
@@ -74,8 +67,8 @@ export const PatientAdvice: React.FC<PatientAdviceProps> = ({
         model || 'oss-llama-3.3-70b'
       );
       if (result.advice && result.advice.trim()) {
-        setLastSource('ai');
-        onUpdateAdvice(result.advice.trim(), true);
+        setLastSource(result.isAiPowered ? 'ai' : 'profile');
+        onUpdateAdvice(result.advice.trim(), result.isAiPowered);
       } else {
         setOfflineError(
           lang === 'ar'
@@ -122,11 +115,13 @@ export const PatientAdvice: React.FC<PatientAdviceProps> = ({
                 {t.patientAdviceTitle}
               </h3>
               <span className="text-[11px] font-mono text-teal-700 dark:text-teal-400">
-                · {lastSource === 'ai' || patient.patientAdvice
+                · {lastSource === 'ai'
                   ? (isRTL
                       ? `مُخصص بالذكاء الاصطناعي (${getModelDisplayName(model)}${isOpenSourceModel(model) ? ' • مفتوح المصدر' : ''})`
                       : `AI-Personalized (${getModelDisplayName(model)}${isOpenSourceModel(model) ? ' • Open Source' : ''})`)
-                  : (isRTL ? 'مُشتق من تخطيط السمع الحالي' : 'Profile-Driven Conservation')}
+                  : lastSource === 'unknown'
+                    ? (isRTL ? 'نصائح محفوظة' : 'Saved guidance')
+                    : (isRTL ? 'إرشادات محلية قائمة على القواعد' : 'Local rule-based guidance')}
               </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
